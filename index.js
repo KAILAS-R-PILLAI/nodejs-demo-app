@@ -1,119 +1,102 @@
-import { createRequire } from "module";
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 
-const require = createRequire(import.meta.url);
+import express from 'express';
+import { MongoClient } from 'mongodb';
+import os from 'os';
+import { publicIpv4 } from 'public-ip';
+
+/* ------------------ __dirname fix for ESM ------------------ */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Using import or export module
-import express from "express";
-import { MongoClient } from 'mongodb';
-import bodyParser from 'body-parser';
-import os from 'os';
+/* ------------------ MongoDB ------------------ */
+const mongoUrl = 'mongodb://mongo:27017/mydatabase';
+const client = new MongoClient(mongoUrl);
 
-import { publicIp, publicIpv4, publicIpv6 } from 'public-ip';
+let collection;
 
-// // Using require
-// const express = require("express");
-// const { MongoClient } = require('mongodb');
-// const bodyParser = require("body-parser");
-// const os = require('os');
-
-
-// For mongodb
-const  mongoUrl= 'mongodb://3.81.12.106:27017/'// Replace with mongodb server IP
-const client = new MongoClient(mongoUrl); 
-
-const db = client.db('mydatabase'); // Name of your database
-const collection = db.collection('mycollection'); // Name of your collection
-
-// Database connection function
 async function connectToMongoDB() {
-    try {
-      await client.connect();
-      console.log('Connected to MongoDB server');
-    } catch (error) {
-      console.error('Error connecting to MongoDB Server:', error);
-    }
+  try {
+    await client.connect();
+    console.log('Connected to MongoDB server');
+
+    const db = client.db('mydatabase');
+    collection = db.collection('mycollection');
+  } catch (error) {
+    console.error('Error connecting to MongoDB:', error);
   }
-  
+}
+
 connectToMongoDB();
 
-// await client.close(); // Close the connection
-
+/* ------------------ Express App ------------------ */
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Home page
+/* Middleware */
+app.use(express.json());
+app.use(express.static(__dirname)); // serve index.html & static assets
+
+/* Home route */
 app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
+  res.sendFile(join(__dirname, 'index.html'));
 });
 
-// Parse incoming requests with JSON payloads
-app.use(express.json());
-app.use(express.static('/')); // Serve static files from root directory also we can use 'public' directory
-
-// Insert data to MongoDB server
+/* Insert data */
 app.post('/insertData', async (req, res) => {
+  try {
     const data = req.body;
 
-    try {
-        // Check for duplicates
-        const existingData = await collection.findOne({ email: data.email });
-
-        if (existingData) {
-            return res.send(' email already exists, user adding fail!!');
-            // return res.status(400).send(' email already exists');
-        }
-
-        // Insert the data
-        await collection.insertOne(data);
-        res.status(200).send(' added successfully');
-        //   console.log('User added successfully....')
-
-
-    } catch (error) {
-        // console.error('Error inserting data:', error);
-        return res.status(500).send(' add Error');
+    const existingData = await collection.findOne({ email: data.email });
+    if (existingData) {
+      return res.status(400).send('Email already exists');
     }
+
+    await collection.insertOne(data);
+    res.status(200).send('Added successfully');
+  } catch (error) {
+    res.status(500).send('Insert error');
+  }
 });
 
-// Get data from MongoDB server
+/* Fetch data */
 app.get('/fetchData', async (req, res) => {
-    const data = await collection.find({}).limit(12).sort({ _id: -1 }).toArray()
-    res.json(data);
-    // console.log('User fetch successfully....')
+  const data = await collection
+    .find({})
+    .limit(12)
+    .sort({ _id: -1 })
+    .toArray();
+
+  res.json(data);
 });
 
-
-// Find host and ip address
+/* Host info */
 app.get('/hostinfo', async (req, res) => {
+  const hostname = os.hostname();
+  const interfaces = os.networkInterfaces();
 
-    const hostname = os.hostname(); // Get the server's hostname
-    const networkInterfaces = os.networkInterfaces();
-    let privateIp = '';
-
-    // Find the private IP address
-    for (const iface in networkInterfaces) {
-        for (let i = 0; i < networkInterfaces[iface].length; i++) {
-            if (networkInterfaces[iface][i].family === 'IPv4' && !networkInterfaces[iface][i].internal) {
-                privateIp = networkInterfaces[iface][i].address;
-                break;
-            }
-        }
-        if (privateIp) break;
+  let privateIp = '';
+  for (const iface of Object.values(interfaces)) {
+    for (const net of iface) {
+      if (net.family === 'IPv4' && !net.internal) {
+        privateIp = net.address;
+        break;
+      }
     }
-    let publicIpAddress = await publicIpv4();
+    if (privateIp) break;
+  }
 
-    const hostinfo = {
-        hostname,
-        privateIp,
-        publicIpAddress
-    };
-    res.json(hostinfo);
+  const publicIpAddress = await publicIpv4();
+
+  res.json({
+    hostname,
+    privateIp,
+    publicIpAddress
+  });
 });
 
-app.listen(PORT, () => {
-    console.log('Server is running on', PORT);
+/* Start server */
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server is running on port ${PORT}`);
 });
